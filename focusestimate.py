@@ -195,7 +195,7 @@ if __name__ == "__main__":
     dataset = torch.utils.data.ConcatDataset([dataset1,dataset2,dataset3,dataset4])
 
     # test dataset, train datasetに分割する
-    train_set, test_set = torch.utils.data.random_split(dataset, [0.7,0.3])
+    train_set, test_set = torch.utils.data.random_split(dataset, [0.9,0.1])
     print("train dataset", len(train_set), "test dataset", len(test_set))
 
     # データローダーの作成
@@ -232,7 +232,7 @@ if __name__ == "__main__":
     #optimizer = optim.SGD(model.parameters())
 
     # 訓練の実行
-    epoch = 50
+    epoch = 30
     train_loss = []
     test_loss = []
     
