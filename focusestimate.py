@@ -43,27 +43,33 @@ from models import RESNETLIKE, MyModel, MyModel_shallow
 class FocusPatchDataset(torch.utils.data.Dataset):
     # FILEはデータが入っていたファイル、imsize = 画像サイズ、psize = パッチサイズ
     def __init__(self, DIR, imsize, psize, channels, DEPTH_GAP, n_sample, transforms):
-        # ground truth depthを読み込むdd
+        # ground truth depthを読み込む
         with open(os.path.join(DIR,'depth.pkl'),"rb") as f:
             self.gt = pickle.load(f)
         
         if self.gt is None:
             print('cannot find ', os.path.join(DIR,'depth.pkl'))
             return None
-        
-        self.files = glob.glob(os.path.join(DIR,'[0-9]*.bmp'))
-        # print(self.files)
-        self.fvalues = []
-        for fn in self.files:
-            self.fvalues.append(int(os.path.splitext(os.path.basename(fn))[0]))
-        self.fvalues.sort()
-        
+
         self.DIR = DIR
         self.DEPTH_GAP = DEPTH_GAP
         self.psize = psize
         self.channels = channels
         self.transforms = transforms
         self.n_sample = n_sample
+        
+        self.files = glob.glob(os.path.join(DIR,'[0-9]*.bmp'))
+        # print(self.files)
+        fvalues = []
+        for fn in self.files:
+            fvalues.append(int(os.path.splitext(os.path.basename(fn))[0]))
+
+        # self fvaluesを作る. self.fvaluesにはフォーカスのペアが入る
+        self.fvalues = []
+        for f in fvalues:
+            if f+DEPTH_GAP*50 in fvalues:
+                self.fvalues.append([f,f+DEPTH_GAP*50])
+                print("focus pair", f, f+DEPTH_GAP*50)
 
         self.imsize = imsize
         self.psize = psize
@@ -83,28 +89,29 @@ class FocusPatchDataset(torch.utils.data.Dataset):
         self.buffer = {}
     
     def __len__(self):
-        length = (len(self.fvalues) - self.DEPTH_GAP)*self.n_sample
+        length = len(self.fvalues)*self.n_sample
         return length
 
     def __getitem__(self, index):
         imgs = []
 
-        # n: file (data) index, m: point index
-        n = index // self.n_sample
-        m = index % self.n_sample
-
-        x = self.locs[m][0]
-        y = self.locs[m][1]
+        # ii: image index, pi: point index
+        ii = index // self.n_sample
+        pi = index % self.n_sample
         
-        val = float(self.gt[y,x]) - float(self.fvalues[n])
+        x = self.locs[pi][0]
+        y = self.locs[pi][1]
+        val = float(self.gt[y,x]) - float(self.fvalues[ii][0])
 
+        # print(index, ii, pi, f"{self.fvalues[ii][0]:04d}.bmp", f"{self.fvalues[ii][1]:04d}.bmp", x, y, self.gt[y,x], self.fvalues[ii][0], val)
+        
         # もしバッファにデータがあるならそれを返す
         if index in self.buffer.keys():
             return self.transforms(self.buffer[index]), val
 
         # バッファにない場合はファイルから読み出す
-        FILE1 = os.path.join(self.DIR,f'{self.fvalues[n]:04d}.bmp')
-        FILE2 = os.path.join(self.DIR,f'{self.fvalues[n+self.DEPTH_GAP]:04d}.bmp')
+        FILE1 = os.path.join(self.DIR,f'{self.fvalues[ii][0]:04d}.bmp')
+        FILE2 = os.path.join(self.DIR,f'{self.fvalues[ii][1]:04d}.bmp')
         
         img = Image.open(FILE1)
         img = img.crop((x, y, x+self.psize, y+self.psize))
@@ -170,29 +177,31 @@ if __name__ == "__main__":
     
     # データセットの作成
     trans = transforms.Compose([
-        transforms.ToTensor()
+        transforms.ToTensor(), transforms.RandomHorizontalFlip(), transforms.RandomVerticalFlip()
     ])
     
     # パラメータの設定
-    PSIZE = 65
+    #PSIZE = 65
+    PSIZE = 111
     DEPTH_GAP = 100
-    N_SAMPLE = 20
+    N_SAMPLE = 5000
     
     # merge several dataset together
-    dataset1 = FocusPatchDataset(DIR = 'data/202410041703', imsize = [1600,1200], 
+    dataset1 = FocusPatchDataset(DIR = 'data/11000-16000/202410041703/', imsize = [1600,1200], 
                                 psize=PSIZE, channels=2, n_sample=N_SAMPLE, 
                                 DEPTH_GAP=DEPTH_GAP, transforms = trans)
-    dataset2 = FocusPatchDataset(DIR = 'data/202410041747', imsize = [1600,1200], 
+    dataset2 = FocusPatchDataset(DIR = 'data/11000-16000/202410041747/', imsize = [1600,1200], 
                                 psize=PSIZE, channels=2, n_sample=N_SAMPLE, 
                                 DEPTH_GAP=DEPTH_GAP, transforms = trans)
-    dataset3 = FocusPatchDataset(DIR = 'data/202410080808', imsize = [1600,1200], 
+    dataset3 = FocusPatchDataset(DIR = 'data/11000-16000/202410080808/', imsize = [1600,1200], 
                                 psize=PSIZE, channels=2, n_sample=N_SAMPLE, 
                                 DEPTH_GAP=DEPTH_GAP, transforms = trans)
-    dataset4= FocusPatchDataset(DIR = 'data/202410080819', imsize = [1600,1200], 
+    dataset4= FocusPatchDataset(DIR = 'data/11000-16000/202410080819/', imsize = [1600,1200], 
                                 psize=PSIZE, channels=2, n_sample=N_SAMPLE, 
                                 DEPTH_GAP=DEPTH_GAP, transforms = trans)
     
     dataset = torch.utils.data.ConcatDataset([dataset1,dataset2,dataset3,dataset4])
+
 
     # test dataset, train datasetに分割する
     train_set, test_set = torch.utils.data.random_split(dataset, [0.9,0.1])
@@ -200,26 +209,25 @@ if __name__ == "__main__":
 
     # データローダーの作成
     train_loader = torch.utils.data.DataLoader(train_set,
-                                               batch_size=1024,  # バッチサイズ
+                                               batch_size=128,  # バッチサイズ
                                                shuffle=True,  # データシャッフル
-                                               num_workers=2,  # 高速化
+                                               num_workers=0,  # 高速化
                                                pin_memory=True  # 高速化                                      
                                                )
     test_loader = torch.utils.data.DataLoader(test_set,
-                                              batch_size=1024,
+                                              batch_size=128,
                                               shuffle=True,
-                                              num_workers=2,  # 高速化
+                                              num_workers=0,  # 高速化
                                               pin_memory=True  # 高速化                                                   
                                               )
 
     # モデル・損失関数・最適化アルゴリスムの設定
-    LOAD_WEIGHT = True
     # model = RESNETLIKE(channels=2).to(device)
     model = MyModel(channels=2)
     #model = MyModel_shallow(channels=2).to(device)
-    weight_file = f"weights/weight_{PSIZE}_{DEPTH_GAP}.pth"
-    
-    if LOAD_WEIGHT == True:
+    weight_file = f"weights/weight_11000_16000_{PSIZE}_{DEPTH_GAP}.pth"
+
+    if os.path.exists(weight_file):
         # 学習済みモデルのロード
         print("load weight", weight_file)
         model.load_state_dict(torch.load(weight_file))
@@ -232,7 +240,7 @@ if __name__ == "__main__":
     #optimizer = optim.SGD(model.parameters())
 
     # 訓練の実行
-    epoch = 30
+    epoch = 50
     train_loss = []
     test_loss = []
     
@@ -252,3 +260,5 @@ if __name__ == "__main__":
     plt.plot(train_loss, label='train_loss')
     plt.plot(test_loss, label='test_loss')
     plt.legend()
+
+
